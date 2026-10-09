@@ -48,7 +48,6 @@ GEMINI_FALLBACK_MODEL = os.getenv(
     "GEMINI_FALLBACK_MODEL",
     "gemini-3.7-flash",
 )
-GEMINI_FALLBACK_MODELS = os.getenv("GEMINI_FALLBACK_MODELS", "")
 EMBEDDING_MODEL = "gemini-embedding-2"
 EMBEDDING_DIMENSION = 1536
 
@@ -229,7 +228,11 @@ def call_gemini(
     if response_mime_type:
         config_options["response_mime_type"] = response_mime_type
 
-    models = configured_gemini_models()
+    models = list(dict.fromkeys(
+        model
+        for model in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL)
+        if model
+    ))
     config = genai.types.GenerateContentConfig(**config_options)
     transient_error_codes = {429, 500, 502, 503, 504}
     last_error = None
@@ -263,17 +266,6 @@ def call_gemini(
     raise RuntimeError(
         f"Gemini chat failed after retrying models: {', '.join(models)}"
     ) from last_error
-
-
-def configured_gemini_models() -> List[str]:
-    fallback_value = GEMINI_FALLBACK_MODELS or GEMINI_FALLBACK_MODEL
-    model_candidates = [GEMINI_MODEL]
-    model_candidates.extend(fallback_value.split(","))
-    return list(dict.fromkeys(
-        model.strip()
-        for model in model_candidates
-        if model and model.strip()
-    ))
 
 
 def extract_attachment_text(attachment: Attachment) -> str:
@@ -1321,11 +1313,17 @@ LANGUAGE RULE:
 
 FRIENDLY REPLY RULE:
 
-- Always reply in a warm, polite and encouraging tone.
-- Use friendly words such as "Sure!", "Absolutely!", "Here you go",
-  "Happy to help!" and "Great question!" where they fit naturally.
-- Include 1 to 3 relevant emojis in every reply (for example 📚, ✨,
-  🎯, 💡, 🍀, 😊, 💪) so the chat feels lively — but do not overdo it.
+- Keep ordinary replies warm, natural, polite and encouraging.
+- Use a brief friendly acknowledgement when it fits, varying phrases
+    such as "Sure!", "Absolutely!", "Good question!" and "Happy to help!".
+- Include 3 or 4 relevant emojis in ordinary replies, placed naturally
+    rather than all together.
+- Use at least one expressive emoji that matches the feeling of the reply:
+    celebrate progress (🎉, 🙌), encourage effort (💪, ✨), show curiosity
+    (🤔, 🔎), or offer warmth and reassurance (😊, 💛).
+- Short greetings may use 1 or 2 emojis; do not force an acknowledgement
+    before a direct factual answer.
+- Never put decorative emojis inside JSON, code, formulas or option labels.
 - Encourage the student, stay patient, and never sound rude or robotic.
 - If the student makes a mistake, respond kindly and help them learn.
 
