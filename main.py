@@ -2,6 +2,7 @@ import os
 import time
 import re
 import json
+import random
 import base64
 import binascii
 from io import BytesIO
@@ -43,6 +44,11 @@ if not SUPABASE_SERVICE_ROLE_KEY:
 
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_FALLBACK_MODEL = os.getenv(
+    "GEMINI_FALLBACK_MODEL",
+    "gemini-3.7-flash",
+)
+GEMINI_FALLBACK_MODELS = os.getenv("GEMINI_FALLBACK_MODELS", "")
 EMBEDDING_MODEL = "gemini-embedding-2"
 EMBEDDING_DIMENSION = 1536
 
@@ -223,11 +229,51 @@ def call_gemini(
     if response_mime_type:
         config_options["response_mime_type"] = response_mime_type
 
-    return gemini_chat_client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=genai.types.GenerateContentConfig(**config_options),
-    )
+    models = configured_gemini_models()
+    config = genai.types.GenerateContentConfig(**config_options)
+    transient_error_codes = {429, 500, 502, 503, 504}
+    last_error = None
+
+    for model_index, model in enumerate(models):
+        for attempt in range(2):
+            try:
+                return gemini_chat_client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                )
+            except Exception as error:
+                if getattr(error, "code", None) not in transient_error_codes:
+                    raise
+
+                last_error = error
+                if attempt == 0:
+                    delay = 1.0 + random.uniform(0, 0.25)
+                    print(
+                        f"Gemini model {model} returned a temporary error; "
+                        f"retrying in {delay:.1f}s."
+                    )
+                    time.sleep(delay)
+                elif model_index + 1 < len(models):
+                    print(
+                        f"Gemini model {model} is still unavailable; "
+                        f"trying fallback model {models[model_index + 1]}."
+                    )
+
+    raise RuntimeError(
+        f"Gemini chat failed after retrying models: {', '.join(models)}"
+    ) from last_error
+
+
+def configured_gemini_models() -> List[str]:
+    fallback_value = GEMINI_FALLBACK_MODELS or GEMINI_FALLBACK_MODEL
+    model_candidates = [GEMINI_MODEL]
+    model_candidates.extend(fallback_value.split(","))
+    return list(dict.fromkeys(
+        model.strip()
+        for model in model_candidates
+        if model and model.strip()
+    ))
 
 
 def extract_attachment_text(attachment: Attachment) -> str:
