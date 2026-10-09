@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ChatBot</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="utility.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css"
+    />
+    <link rel="shortcut icon" href="IMG/favicon.png" type="image/x-icon">
+  </head>
+  <body>
+    <div class="hamburger">
+      <div class="hamburger-icon" onclick="toggleMenu()">
+        <span class="bar1"></span><span class="bar2"></span
+        ><span class="bar3"></span>
+      </div>
+      <div class="logo d-flex flex-col align-center">
+        <img src="IMG/logo.png" />
+        <p>Learn <span>•</span> Practice <span>•</span> Grow</p>
+      </div>
+    </div>
+    <div class="container">
+      <nav class="navbar align-center">
+        <div class="logo d-flex flex-col align-center">
+          <img src="IMG/logo.png" />
+          <p>Learn <span>•</span> Practice <span>•</span> Grow</p>
+        </div>
+        <div>
+          <div class="select-class d-flex align-center">
+            <div>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                height="24px"
+                viewBox="0 -960 960 960"
+                width="24px"
+                fill="#F19E39"
+              >
+                <path
+                  d="M480-120 200-272v-240L40-600l440-240 440 240v320h-80v-276l-80 44v240L480-120Zm0-332 274-148-274-148-274 148 274 148Zm0 241 200-108v-151L480-360 280-470v151l200 108Zm0-241Zm0 90Zm0 0Z"
+                />
+              </svg>
+            </div>
+            <select name="class" id="class-select">
+              <option value="9">Class 9</option>
+              <option value="10">Class 10</option>
+              <option value="11">Class 11</option>
+              <option value="12" selected>Class 12</option>
+            </select>
+          </div>
+          <div class="nav-link">
+            <ul class="d-flex flex-col">
+              <li id="new-chat">
+                <span>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    height="24px"
+                    viewBox="0 -960 960 960"
+                    width="24px"
+                    fill="#FFFFFF"
+                  >
+                    <path
+                      d="M240-400h320v-80H240v80Zm0-120h480v-80H240v80Zm0-120h480v-80H240v80ZM80-80v-720q0-33 23.5-56.5T160-880h640q33 0 56.5 23.5T880-800v480q0 33-23.5 56.5T800-240H240L80-80Zm126-240h594v-480H160v525l46-45Zm-46 0v-480 480Z"
+                    />
+                  </svg> </span
+                >New Chat
+              </li>
+              <li id="study-topics">
+                <span
+                  ><svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    height="24px"
+                    viewBox="0 -960 960 960"
+                    width="24px"
+                    fill="#FFFFFF"
+                  >
+                    <path
+                      d="M160-391h45l23-66h104l24 66h44l-97-258h-46l-97 258Zm81-103 38-107h2l38 107h-78Zm319-70v-68q33-14 67.5-21t72.5-7q26 0 51 4t49 10v64q-24-9-48.5-13.5T700-600q-38 0-73 9.5T560-564Zm0 220v-68q33-14 67.5-21t72.5-7q26 0 51 4t49 10v64q-24-9-48.5-13.5T700-380q-38 0-73 9t-67 27Zm0-110v-68q33-14 67.5-21t72.5-7q26 0 51 4t49 10v64q-24-9-48.5-13.5T700-490q-38 0-73 9.5T560-454ZM260-320q47 0 91.5 10.5T440-278v-394q-41-24-87-36t-93-12q-36 0-71.5 7T120-692v396q35-12 69.5-18t70.5-6Zm260 42q44-21 88.5-31.5T700-320q36 0 70.5 6t69.5 18v-396q-33-14-68.5-21t-71.5-7q-47 0-93 12t-87 36v394Zm-40 118q-48-38-104-59t-116-21q-42 0-82.5 11T100-198q-21 11-40.5-1T40-234v-482q0-11 5.5-21T62-752q46-24 96-36t102-12q58 0 113.5 15T480-740q51-30 106.5-45T700-800q52 0 102 12t96 36q11 5 16.5 15t5.5 21v482q0 23-19.5 35t-40.5 1q-37-20-77.5-31T700-240q-60 0-116 21t-104 59ZM280-499Z"
+                    />
+                  </svg>
+                </span>
+                Study topic
+              </li>
+              <li id="ncert-topics">
+                <span
+                  ><svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    height="24px"
+                    viewBox="0 -960 960 960"
+                    width="24px"
+                    fill="#FFFFFF"
+                  >
+                    <path
+                      d="M320-240h320v-80H320v80Zm0-160h320v-80H320v80ZM240-80q-33 0-56.5-23.5T160-160v-640q0-33 23.5-56.5T240-880h320l240 240v480q0 33-23.5 56.5T720-80H240Zm280-520v-200H240v640h480v-440H520ZM240-800v200-200 640-640Z"
+                    />
+                  </svg>
+                </span>
+                NCERT Notes
+              </li>
+              <li id="saved-chat">
+                <span
+                  ><svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    height="24px"
+                    viewBox="0 -960 960 960"
+                    width="24px"
+                    fill="#FFFFFF"
+                  >
+                    <path
+                      d="M200-120v-640q0-33 23.5-56.5T280-840h400q33 0 56.5 23.5T760-760v640L480-240 200-120Zm80-122 200-86 200 86v-518H280v518Zm0-518h400-400Z"
+                    /></svg></span
+                >Saved Chat
+              </li>
+            </ul>
+          </div>
+          <div class="quick-links d-flex flex-col">
+            <p>Quick Links</p>
+            <div class="d-flex flex-col">
+              <a
+                href="https://studynotespro.great-site.net/MATHS/mathsnotes.html"
+              >
+                Class 12 Maths
+              </a>
+              <a
+                href="https://studynotespro.great-site.net/PHYSICS/physics_landing.html"
+              >
+                Class 12 Physics</a
+              >
+              <a href="https://studynotespro.great-site.net/"> All Notes</a>
+            </div>
+          </div>
+          <section class="footer">
+            <div>Your Study Companion</div>
+            <span> Always here to help!</span>
+          </section>
+        </div>
+      </nav>
+      <main class="main-body">
+        <section class="cb-header d-flex">
+          <div class="cb-logo">🤖</div>
+          <div class="cb-title d-flex flex-col">
+            Study Bot
+            <div><span></span> online</div>
+          </div>
+          <div class="cb-theme" id="cb-theme" title="Toggle theme">🌙</div>
+        </section>
+        <div class="cb-msg" id="cb-msg">
+          <div class="msg bot">
+            <div class="msg-lg">🤖</div>
+            <div class="msg-wrap">
+              <div class="msg-bbl cb-text">
+                <strong>Hi there! Welcome to Study Bot.</strong><br /><br />
+                What would you like to learn today? Ask a question or tell me
+                what you're working on, and we'll take it one step at a time.
+              </div>
+              <div class="msg-ts">just now</div>
+            </div>
+          </div>
+        </div>
+        <section
+          class="cb-msg saved-chat-view"
+          id="saved-chat-view"
+          hidden
+        ></section>
+        <section class="cb-msg panel-view" id="topics-view" hidden></section>
+        <section class="cb-msg panel-view" id="notes-view" hidden></section>
+        <div class="composer">
+          <div
+            id="attachment-list"
+            class="attachment-list"
+            aria-live="polite"
+            hidden
+          ></div>
+          <div class="input-area d-flex">
+            <button
+              id="attach-btn"
+              class="cb-attach"
+              type="button"
+              aria-label="Attach files"
+              title="Attach files"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                height="24px"
+                viewBox="0 -960 960 960"
+                width="24px"
+                fill="#666666"
+              >
+                <path
+                  d="M640-520v-200h80v200h-80ZM440-244q-35-10-57.5-39T360-350v-370h80v476Zm30 164q-104 0-177-73t-73-177v-370q0-75 52.5-127.5T400-880q75 0 127.5 52.5T580-700v300h-80v-300q-1-42-29.5-71T400-800q-42 0-71 29t-29 71v370q-1 71 49 120.5T470-160q25 0 47.5-6.5T560-186v89q-21 8-43.5 12.5T470-80Zm170-40v-120H520v-80h120v-120h80v120h120v80H720v120h-80Z"
+                />
+              </svg>
+            </button>
+            <input id="attachment-input" type="file" multiple hidden />
+            <div class="cb-input d-flex">
+              <textarea
+                id="input"
+                rows="1"
+                placeholder="Type your message here..."
+                aria-label="Type your message"
+              ></textarea>
+              <button
+                id="send-btn"
+                type="button"
+                aria-label="Send message"
+                onclick="cbSend()"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  height="24px"
+                  viewBox="0 -960 960 960"
+                  width="24px"
+                  fill="#FFFFFF"
+                >
+                  <path
+                    d="M120-160v-640l760 320-760 320Zm80-120 474-200-474-200v140l240 60-240 60v140Zm0 0v-400 400Z"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <footer class="composer-footer">
+            Created by <span>Udit Prakash Yadav</span>.
+          </footer>
+        </div>
+      </main>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/contrib/auto-render.min.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
