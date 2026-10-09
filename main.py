@@ -2,6 +2,9 @@ import os
 import time
 import re
 import json
+import base64
+import binascii
+from io import BytesIO
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from functools import lru_cache
@@ -12,16 +15,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from google import genai
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 from supabase import create_client, Client
 
 
 load_dotenv()
 
 
+GEMINI_EMBEDDING_KEY = os.getenv("GEMINI_EMBEDDING_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
+
+if not GEMINI_EMBEDDING_KEY:
+    raise RuntimeError("GEMINI_EMBEDDING_KEY is missing")
 
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY is missing")
@@ -43,9 +52,16 @@ RAG_MATCH_COUNT = 3
 MAX_HISTORY_MESSAGES = 6
 MAX_NCERT_CONTEXT_CHARS = 5500
 MAX_CHUNK_CHARS = 1100
+MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+MAX_ATTACHMENT_TEXT_CHARS = 20000
 
 
-gemini_client = genai.Client(
+gemini_embedding_client = genai.Client(
+    api_key=GEMINI_EMBEDDING_KEY,
+    http_options=genai.types.HttpOptions(timeout=90_000),
+)
+
+gemini_chat_client = genai.Client(
     api_key=GEMINI_API_KEY,
     http_options=genai.types.HttpOptions(timeout=90_000),
 )
@@ -79,6 +95,7 @@ class Attachment(BaseModel):
     name: str
     type: Optional[str] = None
     size: Optional[int] = None
+    content_base64: Optional[str] = None
 
 
 class HistoryMessage(BaseModel):
@@ -178,13 +195,14 @@ def call_gemini(
     temperature: float = 0.2,
     response_mime_type: Optional[str] = None,
 ):
-    """Send the full conversation to the configured Gemini generation model."""
-    system_instructions = [
+    """Send the prompt and conversation turns to the Gemini chat model."""
+    system_instruction = "\n\n".join(
         message["content"].strip()
         for message in messages
-        if message.get("role") == "system" and message.get("content", "").strip()
-    ]
-    if not system_instructions:
+        if message.get("role") == "system"
+        and message.get("content", "").strip()
+    )
+    if not system_instruction:
         raise ValueError("Gemini requests require a system instruction.")
 
     contents = [
@@ -198,18 +216,74 @@ def call_gemini(
     ]
 
     config_options = {
-        "system_instruction": "\n\n".join(system_instructions),
+        "system_instruction": system_instruction,
         "temperature": temperature,
         "max_output_tokens": max_tokens,
     }
     if response_mime_type:
         config_options["response_mime_type"] = response_mime_type
 
-    return gemini_client.models.generate_content(
+    return gemini_chat_client.models.generate_content(
         model=GEMINI_MODEL,
         contents=contents,
         config=genai.types.GenerateContentConfig(**config_options),
     )
+
+
+def extract_attachment_text(attachment: Attachment) -> str:
+    """Extract text from uploaded PDFs and common UTF-8 text files."""
+    if not attachment.content_base64:
+        return ""
+
+    try:
+        content = base64.b64decode(
+            attachment.content_base64,
+            validate=True,
+        )
+    except (binascii.Error, ValueError) as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Attachment '{attachment.name}' is not valid base64.",
+        ) from error
+
+    if len(content) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Attachment '{attachment.name}' exceeds the 5 MB limit.",
+        )
+
+    content_type = (attachment.type or "").split(";", 1)[0].strip().lower()
+    file_name = attachment.name.lower()
+
+    if content_type == "application/pdf" or file_name.endswith(".pdf"):
+        try:
+            reader = PdfReader(BytesIO(content))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except (PdfReadError, ValueError) as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Attachment '{attachment.name}' is not a readable PDF.",
+            ) from error
+    else:
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError as error:
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    f"Attachment '{attachment.name}' is not a supported text file. "
+                    "Upload a PDF or UTF-8 text file."
+                ),
+            ) from error
+
+    text = text.strip()
+    if not text:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No readable text was found in '{attachment.name}'.",
+        )
+
+    return text[:MAX_ATTACHMENT_TEXT_CHARS]
 
 
 def extract_requested_question_count(
@@ -248,8 +322,6 @@ def generate_fallback_mcq_quiz(
     """Deterministic MCQ fallback used when the model fails or returns malformed JSON."""
     requested_count = extract_requested_question_count(user_message)
     subject_text = (subject or "General").strip() or "General"
-    chapter_text = (chapter or "Core").strip() or "Core"
-
     physics_questions = [
         {
             "question": "The SI unit of electric charge is:",
@@ -923,7 +995,7 @@ def generate_query_embedding_cached(
     text: str
 ):
 
-    result = gemini_client.models.embed_content(
+    result = gemini_embedding_client.models.embed_content(
         model=EMBEDDING_MODEL,
         contents=text,
         config={
@@ -1227,7 +1299,7 @@ If the student asks for multiple MCQs:
 
 FORMAT:
 
-### 🔹 Question 01
+###  Question 01
 
 **Question text**
 
@@ -1928,25 +2000,18 @@ def chat(
             )
 
         if request.attachments:
-
-            names = ", ".join(
-                attachment.name
-                for attachment
-                in request.attachments
-            )
-
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "The student attached "
-                        f"these files: {names}. "
-                        "Attachment content "
-                        "extraction is not "
-                        "implemented yet."
+            for attachment in request.attachments:
+                attachment_text = extract_attachment_text(attachment)
+                content = f"Attached file: {attachment.name}"
+                if attachment_text:
+                    content += (
+                        "\nExtracted file content:\n"
+                        f"{attachment_text}"
                     )
-                }
-            )
+                messages.append({
+                    "role": "user",
+                    "content": content,
+                })
 
         generation_start = (
             time.perf_counter()
