@@ -2,7 +2,7 @@
 
 Your AI-Powered Study Companion for Classes 9-12
 
-**Website:** [studybot](https://studybot.great-site.net)
+**Website:** [Study Bot ](https://studybot.great-site.net)
 
 ---
 
@@ -41,7 +41,7 @@ Whether you're struggling with a concept, preparing for exams, or need quick cla
 
 ## 🚀 How to Use
 
-1. **Visit StudyBot:** Go to [studybot](https://studybot.great-site.net)
+1. **Visit StudyBot:** Go to [Study Bot](https://studybot.great-site.net)
 2. **Select Your Class:** Choose your class (9, 10, 11, or 12)
 3. **Browse Study Topics:** View topics organized by subject
 4. **Send Prompt:** Click on a topic to send a pre-formatted prompt to the chatbot
