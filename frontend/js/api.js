@@ -1,5 +1,5 @@
 // backend address
-const BASE_URL = "https://study-notes-pro-ai.onrender.com";
+const BASE_URL = "http://127.0.0.1:8000";
 
 // check server
 async function pingServer() {
@@ -9,6 +9,80 @@ async function pingServer() {
   } catch (err) {
     return false;
   }
+}
+
+async function readSseChatResponse(res, onChunk) {
+  if (!res.body) {
+    throw new Error("The study server returned an empty stream.");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let reply = "";
+  let completed = false;
+
+  function handleEvent(block) {
+    let eventName = "message";
+    const dataLines = [];
+
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+
+    if (dataLines.length === 0) return;
+    const payload = JSON.parse(dataLines.join("\n"));
+
+    if (eventName === "token") {
+      if (typeof payload.text !== "string") {
+        throw new Error("The study server sent an invalid text chunk.");
+      }
+      reply += payload.text;
+      onChunk(payload.text);
+    } else if (eventName === "error") {
+      throw new Error(payload.detail || "The AI request failed.");
+    } else if (eventName === "done") {
+      completed = true;
+    }
+  }
+
+  function processBufferedEvents(final = false) {
+    buffer = buffer.replace(/\r\n/g, "\n");
+
+    let separator = buffer.indexOf("\n\n");
+    while (separator !== -1) {
+      const block = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      if (block) handleEvent(block);
+      separator = buffer.indexOf("\n\n");
+    }
+
+    if (final && buffer.trim()) {
+      handleEvent(buffer);
+      buffer = "";
+    }
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      processBufferedEvents(done);
+      if (done) break;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!completed) {
+    throw new Error("The study server ended the reply stream unexpectedly.");
+  }
+
+  return reply;
 }
 
 // send chat message
@@ -68,10 +142,14 @@ async function sendMessage(
     const err = new Error(
       mixedContent
         ? `This page is served over HTTPS, so the browser blocked the call to the local HTTP API at ${BASE_URL} (mixed content). Open the frontend over http:// (localhost) or serve the API over HTTPS.`
-        : `Could not connect to the study API at ${BASE_URL}. Make sure the Python server is running (uvicorn main:app) and reload the page with Ctrl+Shift+R.`,
+        : `Could not connect to the study API. `,
     );
     err.kind = "network";
     throw err;
+  }
+
+  if (res.headers.get("content-type")?.includes("text/event-stream")) {
+    return readSseChatResponse(res, onChunk);
   }
 
   if (!res.ok) {

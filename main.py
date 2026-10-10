@@ -11,11 +11,12 @@ from typing import Optional, List, Dict, Any
 from functools import lru_cache
 
 from dotenv import load_dotenv
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from google import genai
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 from supabase import create_client, Client
@@ -24,17 +25,13 @@ from supabase import create_client, Client
 load_dotenv()
 
 
-GEMINI_EMBEDDING_KEY = os.getenv("GEMINI_EMBEDDING_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 
-if not GEMINI_EMBEDDING_KEY:
-    raise RuntimeError("GEMINI_EMBEDDING_KEY is missing")
-
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is missing")
+if not NVIDIA_API_KEY:
+    raise RuntimeError("NVIDIA_API_KEY is missing")
 
 if not SUPABASE_URL:
     raise RuntimeError("SUPABASE_URL is missing")
@@ -43,13 +40,16 @@ if not SUPABASE_SERVICE_ROLE_KEY:
     raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY is missing")
 
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-GEMINI_FALLBACK_MODEL = os.getenv(
-    "GEMINI_FALLBACK_MODEL",
-    "gemini-3.7-flash",
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+NVIDIA_FALLBACK_MODEL = os.getenv(
+    "NVIDIA_FALLBACK_MODEL",
+    "meta/llama-3.2-3b-instruct",
 )
-EMBEDDING_MODEL = "gemini-embedding-2"
-EMBEDDING_DIMENSION = 1536
+EMBEDDING_MODEL = os.getenv(
+    "NVIDIA_EMBEDDING_MODEL",
+    "nvidia/nemotron-3-embed-1b",
+)
+EMBEDDING_DIMENSION = 2048
 
 RAG_MATCH_THRESHOLD = 0.58
 RAG_MATCH_COUNT = 3
@@ -61,14 +61,10 @@ MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 MAX_ATTACHMENT_TEXT_CHARS = 20000
 
 
-gemini_embedding_client = genai.Client(
-    api_key=GEMINI_EMBEDDING_KEY,
-    http_options=genai.types.HttpOptions(timeout=90_000),
-)
-
-gemini_chat_client = genai.Client(
-    api_key=GEMINI_API_KEY,
-    http_options=genai.types.HttpOptions(timeout=90_000),
+nvidia_chat_client = httpx.Client(
+    base_url="https://integrate.api.nvidia.com/v1",
+    headers={"Authorization": f"Bearer {NVIDIA_API_KEY}"},
+    timeout=90.0,
 )
 
 supabase: Client = create_client(
@@ -193,79 +189,218 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-def call_gemini(
+def call_nvidia(
     messages: List[Dict[str, str]],
     *,
     max_tokens: int,
     temperature: float = 0.2,
     response_mime_type: Optional[str] = None,
 ):
-    """Send the prompt and conversation turns to the Gemini chat model."""
-    system_instruction = "\n\n".join(
-        message["content"].strip()
-        for message in messages
-        if message.get("role") == "system"
+    """Send the prompt and conversation turns to NVIDIA NIM."""
+    if not any(
+        message.get("role") == "system"
         and message.get("content", "").strip()
-    )
-    if not system_instruction:
-        raise ValueError("Gemini requests require a system instruction.")
-
-    contents = [
-        {
-            "role": "model" if message.get("role") == "assistant" else "user",
-            "parts": [{"text": message["content"]}],
-        }
         for message in messages
-        if message.get("role") in {"user", "assistant"}
-        and message.get("content", "").strip()
-    ]
+    ):
+        raise ValueError("NVIDIA requests require a system instruction.")
 
-    config_options = {
-        "system_instruction": system_instruction,
+    completion_options = {
+        "messages": messages,
+        "max_tokens": max_tokens,
         "temperature": temperature,
-        "max_output_tokens": max_tokens,
     }
     if response_mime_type:
-        config_options["response_mime_type"] = response_mime_type
+        completion_options["response_format"] = {"type": "json_object"}
 
     models = list(dict.fromkeys(
-        model
-        for model in (GEMINI_MODEL, GEMINI_FALLBACK_MODEL)
-        if model
+        model for model in (NVIDIA_MODEL, NVIDIA_FALLBACK_MODEL) if model
     ))
-    config = genai.types.GenerateContentConfig(**config_options)
     transient_error_codes = {429, 500, 502, 503, 504}
-    last_error = None
+    last_error: Optional[Exception] = None
 
     for model_index, model in enumerate(models):
         for attempt in range(2):
             try:
-                return gemini_chat_client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=config,
+                response = nvidia_chat_client.post(
+                    "/chat/completions",
+                    json={**completion_options, "model": model},
                 )
+                response.raise_for_status()
+                return response.json()
             except Exception as error:
-                if getattr(error, "code", None) not in transient_error_codes:
+                if (
+                    not isinstance(error, httpx.HTTPStatusError)
+                    or error.response.status_code not in transient_error_codes
+                ):
                     raise
 
                 last_error = error
                 if attempt == 0:
                     delay = 1.0 + random.uniform(0, 0.25)
                     print(
-                        f"Gemini model {model} returned a temporary error; "
+                        f"NVIDIA model {model} returned a temporary error; "
                         f"retrying in {delay:.1f}s."
                     )
                     time.sleep(delay)
                 elif model_index + 1 < len(models):
                     print(
-                        f"Gemini model {model} is still unavailable; "
+                        f"NVIDIA model {model} is still unavailable; "
                         f"trying fallback model {models[model_index + 1]}."
                     )
 
     raise RuntimeError(
-        f"Gemini chat failed after retrying models: {', '.join(models)}"
+        f"NVIDIA chat failed after retrying models: {', '.join(models)}"
     ) from last_error
+
+
+def stream_nvidia(
+    messages: List[Dict[str, str]],
+    *,
+    max_tokens: int,
+    temperature: float = 0.2,
+):
+    """Yield response text chunks from NVIDIA NIM's streaming API."""
+    if not any(
+        message.get("role") == "system"
+        and message.get("content", "").strip()
+        for message in messages
+    ):
+        raise ValueError("NVIDIA requests require a system instruction.")
+
+    request_body = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": True,
+    }
+    models = list(dict.fromkeys(
+        model for model in (NVIDIA_MODEL, NVIDIA_FALLBACK_MODEL) if model
+    ))
+    transient_error_codes = {429, 500, 502, 503, 504}
+    last_error: Optional[Exception] = None
+
+    for model_index, model in enumerate(models):
+        for attempt in range(2):
+            yielded_content = False
+            try:
+                with nvidia_chat_client.stream(
+                    "POST",
+                    "/chat/completions",
+                    json={**request_body, "model": model},
+                ) as response:
+                    response.raise_for_status()
+                    for line in response.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            return
+
+                        chunk = json.loads(data)
+                        for choice in chunk.get("choices", []):
+                            content = choice.get("delta", {}).get("content")
+                            if content:
+                                yielded_content = True
+                                yield content
+                return
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code not in transient_error_codes:
+                    raise
+                if yielded_content:
+                    raise
+
+                last_error = error
+                if attempt == 0:
+                    delay = 1.0 + random.uniform(0, 0.25)
+                    print(
+                        f"NVIDIA model {model} returned a temporary error; "
+                        f"retrying in {delay:.1f}s."
+                    )
+                    time.sleep(delay)
+                elif model_index + 1 < len(models):
+                    print(
+                        f"NVIDIA model {model} is still unavailable; "
+                        f"trying fallback model {models[model_index + 1]}."
+                    )
+
+    raise RuntimeError(
+        f"NVIDIA chat streaming failed after retrying models: "
+        f"{', '.join(models)}"
+    ) from last_error
+
+
+def encode_sse(event: str, payload: Dict[str, Any]) -> str:
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    )
+
+
+def stream_chat_reply(
+    messages: List[Dict[str, str]],
+    request: ChatRequest,
+    *,
+    active_class: str,
+    subject: Optional[str],
+    chapter: Optional[str],
+    rag_sources: int,
+    total_start: float,
+    max_tokens: int,
+):
+    """Stream a regular chat reply as SSE and save it when generation finishes."""
+    generation_start = time.perf_counter()
+    reply_parts = []
+
+    try:
+        for text in stream_nvidia(
+            messages,
+            max_tokens=max_tokens,
+            temperature=0.2,
+        ):
+            reply_parts.append(text)
+            yield encode_sse("token", {"text": text})
+
+        reply = "".join(reply_parts)
+
+        if request.chat_id:
+            old_history = list(request.history)
+            if request.message.strip():
+                old_history.append(
+                    {"role": "user", "content": request.message.strip()}
+                )
+            old_history.append(
+                {"role": "assistant", "content": reply}
+            )
+
+            saved_chats[request.chat_id] = {
+                "id": request.chat_id,
+                "title": request.chat_title or "New chat",
+                "updated_at": datetime.now().isoformat(),
+                "messages": old_history,
+                "class_level": active_class,
+            }
+
+        generation_time = time.perf_counter() - generation_start
+        total_time = time.perf_counter() - total_start
+        print(
+            f"NVIDIA stream: {generation_time:.2f}s | "
+            f"Total: {total_time:.2f}s"
+        )
+        yield encode_sse(
+            "done",
+            {
+                "class_level": active_class,
+                "subject": subject,
+                "chapter": chapter,
+                "rag": {"used": rag_sources > 0, "sources": rag_sources},
+            },
+        )
+    except Exception as error:
+        print("\n========== CHAT STREAM ERROR ==========")
+        print(repr(error))
+        print("========================================\n")
+        yield encode_sse("error", {"detail": "AI request failed."})
 
 
 def extract_attachment_text(attachment: Attachment) -> str:
@@ -1033,18 +1168,33 @@ def generate_query_embedding_cached(
     text: str
 ):
 
-    result = gemini_embedding_client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=text,
-        config={
-            "output_dimensionality":
-                EMBEDDING_DIMENSION
-        }
+    response = nvidia_chat_client.post(
+        "/embeddings",
+        json={
+            "input": [text],
+            "model": EMBEDDING_MODEL,
+            "input_type": "query",
+            "encoding_format": "float",
+        },
+        timeout=10.0,
     )
+    response.raise_for_status()
+    result = response.json()
 
-    return tuple(
-        result.embeddings[0].values
-    )
+    embeddings = result.get("data", [])
+    if not embeddings:
+        raise RuntimeError("NVIDIA returned no query embedding.")
+
+    embedding = embeddings[0].get("embedding")
+    if not isinstance(embedding, list):
+        raise RuntimeError("NVIDIA returned an invalid query embedding.")
+    if len(embedding) != EMBEDDING_DIMENSION:
+        raise RuntimeError(
+            f"Expected {EMBEDDING_DIMENSION} embedding dimensions from "
+            f"{EMBEDDING_MODEL}, got {len(embedding)}."
+        )
+
+    return tuple(embedding)
 
 
 def generate_query_embedding(
@@ -2069,7 +2219,26 @@ def chat(
         else:
             max_tokens = 1000
 
-        response = call_gemini(
+        if not quiz_request:
+            return StreamingResponse(
+                stream_chat_reply(
+                    messages,
+                    request,
+                    active_class=active_class,
+                    subject=subject,
+                    chapter=chapter,
+                    rag_sources=len(rag_results),
+                    total_start=total_start,
+                    max_tokens=max_tokens,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        response = call_nvidia(
             messages,
             max_tokens=max_tokens,
             temperature=0.2,
@@ -2077,13 +2246,12 @@ def chat(
                 "application/json" if quiz_request else None
             ),
         )
+        reply = response["choices"][0]["message"]["content"] or ""
 
-        gemini_time = (
+        generation_time = (
             time.perf_counter()
             - generation_start
         )
-
-        reply = response.text or ""
 
         quiz_data = None
 
@@ -2097,8 +2265,8 @@ def chat(
             )
 
             finish_reason = (
-                response.candidates[0].finish_reason
-                if response.candidates
+                response["choices"][0]["finish_reason"]
+                if response.get("choices")
                 else None
             )
 
@@ -2130,13 +2298,13 @@ def chat(
                 ]
 
                 try:
-                    retry_response = call_gemini(
+                    retry_response = call_nvidia(
                         retry_messages,
                         max_tokens=max_tokens,
                         temperature=0.3,
                         response_mime_type="application/json",
                     )
-                    retry_reply = retry_response.text or ""
+                    retry_reply = retry_response["choices"][0]["message"]["content"] or ""
                     retry_quiz = parse_quiz_response(retry_reply)
 
                     if retry_quiz:
@@ -2238,7 +2406,7 @@ def chat(
 
             print(
             f"Quiz generated: {actual_count}/{requested_count} | "
-            f"Gemini: {gemini_time:.2f}s | "
+            f"NVIDIA: {generation_time:.2f}s | "
             f"Total: {total_time:.2f}s"
             )
 
@@ -2276,7 +2444,7 @@ def chat(
         )
 
         print(
-            f"Gemini: {gemini_time:.2f}s | "
+            f"NVIDIA: {generation_time:.2f}s | "
             f"Total: {total_time:.2f}s"
         )
 

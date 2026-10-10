@@ -997,7 +997,12 @@ function renderQuizMath(container) {
 
 //& Append message
 
-function cbAppend(role, text, files = [], shouldPersist = true) {
+function cbAppend(
+  role,
+  text,
+  files = [],
+  shouldPersist = true,
+) {
   if (shouldPersist) {
     conversationMessages.push({
       role,
@@ -1009,6 +1014,7 @@ function cbAppend(role, text, files = [], shouldPersist = true) {
 
   const message = document.createElement("div");
   message.className = `msg ${role === "user" ? "me" : "bot"}`;
+  message.copyText = text;
 
   const avatar = document.createElement("div");
   avatar.className = "msg-lg";
@@ -1071,7 +1077,7 @@ function cbAppend(role, text, files = [], shouldPersist = true) {
 
     copyBtn.addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(message.copyText);
         const span = copyBtn.querySelector("span");
         if (span) span.textContent = "Copied!";
         setTimeout(() => {
@@ -1094,6 +1100,24 @@ function cbAppend(role, text, files = [], shouldPersist = true) {
   msgs.appendChild(message);
   msgs.scrollTop = msgs.scrollHeight;
   return message;
+}
+
+function finishStreamedBotMessage(message, text) {
+  const bubble = message.querySelector(".msg-bbl");
+  if (!bubble) return;
+
+  message.copyText = text;
+  renderBotMessageContent(bubble, text);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function renderStreamedBotMessage(message, text) {
+  const bubble = message.querySelector(".msg-bbl");
+  if (!bubble || !message.isConnected) return;
+
+  message.copyText = text;
+  renderBotMessageContent(bubble, text);
+  msgs.scrollTop = msgs.scrollHeight;
 }
 
 
@@ -1374,6 +1398,10 @@ async function cbSend() {
 
   showType();
 
+  let streamedMessage = null;
+  let streamedText = "";
+  let streamRenderFrame = null;
+
   try {
     const classLevel =
       document.getElementById(
@@ -1384,7 +1412,27 @@ async function cbSend() {
       txt,
       classLevel,
       history,
-      () => {},
+      (chunk) => {
+        if (
+          typeof chunk !== "string" ||
+          sentConversationId !== conversationId
+        ) {
+          return;
+        }
+
+        streamedText += chunk;
+        if (!streamedMessage) {
+          hideType();
+          streamedMessage = cbAppend("bot", "", [], false);
+        }
+
+        if (streamRenderFrame === null) {
+          streamRenderFrame = requestAnimationFrame(() => {
+            streamRenderFrame = null;
+            renderStreamedBotMessage(streamedMessage, streamedText);
+          });
+        }
+      },
       filesToSend,
       activeChatId,
       chatTitle,
@@ -1398,6 +1446,10 @@ async function cbSend() {
     }
 
     hideType();
+    if (streamRenderFrame !== null) {
+      cancelAnimationFrame(streamRenderFrame);
+      streamRenderFrame = null;
+    }
 
 
     // ======================================
@@ -1436,9 +1488,20 @@ async function cbSend() {
       // as raw JSON text in the chat.
       if (isRawQuizJson(reply)) {
         console.warn("Unparseable quiz reply:", reply);
+        if (streamedMessage) streamedMessage.remove();
         cbAppend("bot", QUIZ_FAILED_TEXT);
       } else {
-        cbAppend("bot", reply);
+        if (streamedMessage) {
+          finishStreamedBotMessage(streamedMessage, reply);
+          conversationMessages.push({
+            role: "bot",
+            text: reply,
+            files: [],
+          });
+          persistConversation();
+        } else {
+          cbAppend("bot", reply);
+        }
       }
     }
 
@@ -1467,11 +1530,25 @@ async function cbSend() {
     }
 
     hideType();
+    if (streamRenderFrame !== null) {
+      cancelAnimationFrame(streamRenderFrame);
+      streamRenderFrame = null;
+    }
 
     const detail =
       error && error.message
         ? error.message
         : "Please check that the Python API is running and try again.";
+
+    if (streamedMessage && streamedText) {
+      finishStreamedBotMessage(streamedMessage, streamedText);
+      conversationMessages.push({
+        role: "bot",
+        text: streamedText,
+        files: [],
+      });
+      persistConversation();
+    }
 
     cbAppend(
       "bot",
