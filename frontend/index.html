@@ -6,6 +6,7 @@
     <title>ChatBot</title>
     <link rel="stylesheet" href="style.css" />
     <link rel="stylesheet" href="utility.css" />
+    <link rel="stylesheet" href="notebook.css" />
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css"
@@ -13,7 +14,7 @@
     <link rel="shortcut icon" href="IMG/favicon.png" type="image/x-icon">
   </head>
   <body>
-    <div class="hamburger">
+    <div class="hamburger ">
       <div class="hamburger-icon" onclick="toggleMenu()">
         <span class="bar1"></span><span class="bar2"></span
         ><span class="bar3"></span>
@@ -146,6 +147,22 @@
             <div><span></span> online</div>
           </div>
           <div class="cb-theme" id="cb-theme" title="Toggle theme">🌙</div>
+          <button
+            type="button"
+            class="cb-theme cb-style-btn"
+            id="cb-style-btn"
+            title="Change style"
+            aria-label="Change style"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="cb-style-menu"
+          >🎨</button>
+          <div class="cb-style-menu" id="cb-style-menu" role="menu" hidden>
+            <button type="button" role="menuitemradio" data-skin="normal" aria-checked="true">📓 Normal</button>
+            <button type="button" role="menuitemradio" data-skin="graph" aria-checked="false">📐 Graph paper</button>
+            <button type="button" role="menuitemradio" data-skin="sheet" aria-checked="false">📝 Answer sheet</button>
+            <button type="button" role="menuitemradio" data-skin="sticky" aria-checked="false">🟨 Sticky notes</button>
+          </div>
         </section>
         <div class="cb-msg" id="cb-msg">
           <div class="msg bot">
@@ -155,6 +172,12 @@
                 <strong>Hi there! Welcome to Study Bot.</strong><br /><br />
                 What would you like to learn today? Ask a question or tell me
                 what you're working on, and we'll take it one step at a time.
+                <div class="suggest-chips">
+                  <button type="button" class="chip" data-prompt="Explain an important Class 12 topic to me step by step">📘 Explain a topic</button>
+                  <button type="button" class="chip" data-prompt="Quiz me with 5 questions on my syllabus">🧠 Quiz me</button>
+                  <button type="button" class="chip" data-prompt="Give me a quick revision summary of an important chapter">📝 Quick revision</button>
+                  <button type="button" class="chip" data-prompt="Help me solve a numerical step by step">🧮 Solve a numerical</button>
+                </div>
               </div>
               <div class="msg-ts">just now</div>
             </div>
@@ -199,7 +222,7 @@
               <textarea
                 id="input"
                 rows="1"
-                placeholder="Type your message here..."
+                placeholder="Write your doubt here..."
                 aria-label="Type your message"
               ></textarea>
               <button
@@ -232,7 +255,18 @@
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/contrib/auto-render.min.js"></script>
+    <script>
+      // chip clicks
+      document.addEventListener("click", (e) => {
+        const chip = e.target.closest(".chip[data-prompt]");
+        if (!chip) return;
+        document.getElementById("input").value = chip.dataset.prompt;
+        cbSend();
+      });
+    </script>
     <script src="js/api.js"></script>
     <script src="js/app.js"></script>
+    <script src="js/extras.js"></script>
+    <script src="js/notebook.js"></script>
   </body>
 </html>

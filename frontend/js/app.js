@@ -132,6 +132,21 @@ function enhanceCodeBlocks(container) {
   });
 }
 
+function labelMarkdownTableCells(container) {
+  container.querySelectorAll("table").forEach((table) => {
+    const headers = Array.from(table.querySelectorAll("thead th"), (cell) =>
+      cell.textContent.trim(),
+    );
+    if (!headers.length) return;
+
+    table.querySelectorAll("tbody tr").forEach((row) => {
+      Array.from(row.cells).forEach((cell, index) => {
+        if (headers[index]) cell.dataset.label = headers[index];
+      });
+    });
+  });
+}
+
 function renderBotMessageContent(bubble, text) {
   if (!text) {
     bubble.textContent = "";
@@ -191,6 +206,8 @@ function renderBotMessageContent(bubble, text) {
   } else {
     bubble.innerHTML = html;
   }
+
+  labelMarkdownTableCells(bubble);
 
   // 5. Render KaTeX math
   if (typeof renderMathInElement === "function") {

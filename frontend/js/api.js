@@ -1,5 +1,5 @@
 // backend address
-const BASE_URL = "http://127.0.0.1:8000";
+const BASE_URL = "https://studybot-z71a.onrender.com";
 
 // check server
 async function pingServer() {
@@ -9,7 +9,7 @@ async function pingServer() {
   } catch (err) {
     return false;
   }
-}
+} 
 
 async function readSseChatResponse(res, onChunk) {
   if (!res.body) {
