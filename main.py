@@ -41,15 +41,27 @@ if not SUPABASE_SERVICE_ROLE_KEY:
 
 
 NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+# comma separated, tried in order
 NVIDIA_FALLBACK_MODEL = os.getenv(
     "NVIDIA_FALLBACK_MODEL",
-    "meta/llama-3.2-3b-instruct",
+    "meta/llama-3.3-70b-instruct",
 )
+
+
+def get_model_list() -> List[str]:
+    fallbacks = [
+        m.strip() for m in NVIDIA_FALLBACK_MODEL.split(",") if m.strip()
+    ]
+    return list(dict.fromkeys(
+        m for m in [NVIDIA_MODEL, *fallbacks] if m
+    ))
 EMBEDDING_MODEL = os.getenv(
     "NVIDIA_EMBEDDING_MODEL",
     "nvidia/nemotron-3-embed-1b",
 )
-EMBEDDING_DIMENSION = 2048
+
+# nemotron-3-embed-1b only outputs 2048 dims
+EMBEDDING_DIMENSION = int(os.getenv("NVIDIA_EMBEDDING_DIMENSION", "2048"))
 
 RAG_MATCH_THRESHOLD = 0.58
 RAG_MATCH_COUNT = 3
@@ -60,12 +72,69 @@ MAX_CHUNK_CHARS = 1100
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 MAX_ATTACHMENT_TEXT_CHARS = 20000
 
+# quiz gets more time than normal chat
+QUIZ_TIMEOUT_SECONDS = float(os.getenv("QUIZ_TIMEOUT_SECONDS", "240"))
+QUIZ_VERIFY_ANSWERS = os.getenv("QUIZ_VERIFY_ANSWERS", "1") == "1"
+
+
+def get_academic_session(today: Optional[datetime] = None) -> str:
+    """CBSE session runs April to March, e.g. 2026-27."""
+    today = today or datetime.now()
+    start_year = today.year if today.month >= 4 else today.year - 1
+    return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def build_syllabus_rules(class_level: str) -> str:
+    session = get_academic_session()
+    return f"""- SYLLABUS (MANDATORY): Follow the CBSE curriculum and latest NCERT
+  textbooks for Class {class_level} for the CURRENT academic session
+  {session}. Today's date is {datetime.now().strftime("%d %B %Y")}.
+- Use only chapters, topics and terminology that are in the {session}
+  CBSE syllabus. Never use topics that CBSE has deleted or rationalised,
+  and never use an older session's syllabus.
+- Use the session silently. Do NOT write the session or year in titles,
+  questions or replies unless the student explicitly asks for it.
+- Prefer competency-based questions (application, case-based,
+  assertion-reason, data interpretation) as per the {session} CBSE pattern.
+- Supplied NCERT context is learning material, not proof that a topic is
+  still in the syllabus. If unsure a topic is in the {session} syllabus,
+  skip it for quizzes, or say so briefly in chat answers."""
+
 
 nvidia_chat_client = httpx.Client(
     base_url="https://integrate.api.nvidia.com/v1",
     headers={"Authorization": f"Bearer {NVIDIA_API_KEY}"},
     timeout=90.0,
 )
+
+# #region agent log
+_DEBUG_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..",
+    "debug-546c61.log",
+)
+
+
+def _agent_dbg(location, message, data=None, hypothesis_id=""):
+    try:
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as _debug_file:
+            _debug_file.write(
+                json.dumps(
+                    {
+                        "sessionId": "546c61",
+                        "timestamp": int(time.time() * 1000),
+                        "location": location,
+                        "message": message,
+                        "data": data or {},
+                        "hypothesisId": hypothesis_id,
+                    },
+                    default=str,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+# #endregion
 
 supabase: Client = create_client(
     SUPABASE_URL,
@@ -195,6 +264,7 @@ def call_nvidia(
     max_tokens: int,
     temperature: float = 0.2,
     response_mime_type: Optional[str] = None,
+    timeout: Optional[float] = None,
 ):
     """Send the prompt and conversation turns to NVIDIA NIM."""
     if not any(
@@ -212,10 +282,9 @@ def call_nvidia(
     if response_mime_type:
         completion_options["response_format"] = {"type": "json_object"}
 
-    models = list(dict.fromkeys(
-        model for model in (NVIDIA_MODEL, NVIDIA_FALLBACK_MODEL) if model
-    ))
+    models = get_model_list()
     transient_error_codes = {429, 500, 502, 503, 504}
+    gone_error_codes = {404, 410}
     last_error: Optional[Exception] = None
 
     for model_index, model in enumerate(models):
@@ -224,10 +293,62 @@ def call_nvidia(
                 response = nvidia_chat_client.post(
                     "/chat/completions",
                     json={**completion_options, "model": model},
+                    **({"timeout": timeout} if timeout else {}),
                 )
                 response.raise_for_status()
+                # #region agent log
+                _agent_dbg(
+                    "main.py:call_nvidia",
+                    "nvidia chat success",
+                    {
+                        "model": model,
+                        "status": response.status_code,
+                        "json_mode": bool(response_mime_type),
+                        "max_tokens": max_tokens,
+                    },
+                    "E",
+                )
+                # #endregion
                 return response.json()
             except Exception as error:
+                # #region agent log
+                status = (
+                    error.response.status_code
+                    if isinstance(error, httpx.HTTPStatusError)
+                    else None
+                )
+                body = ""
+                if isinstance(error, httpx.HTTPStatusError):
+                    try:
+                        body = (error.response.text or "")[:400]
+                    except Exception:
+                        body = ""
+                _agent_dbg(
+                    "main.py:call_nvidia",
+                    "nvidia chat error",
+                    {
+                        "model": model,
+                        "status": status,
+                        "error_type": type(error).__name__,
+                        "error": str(error)[:400],
+                        "body": body,
+                        "json_mode": bool(response_mime_type),
+                    },
+                    "E",
+                )
+                # #endregion
+                # retired model, skip to next one
+                if (
+                    isinstance(error, httpx.HTTPStatusError)
+                    and error.response.status_code in gone_error_codes
+                ):
+                    last_error = error
+                    print(
+                        f"NVIDIA model {model} is gone "
+                        f"({error.response.status_code}); skipping it."
+                    )
+                    break
+
                 if (
                     not isinstance(error, httpx.HTTPStatusError)
                     or error.response.status_code not in transient_error_codes
@@ -238,8 +359,8 @@ def call_nvidia(
                 if attempt == 0:
                     delay = 1.0 + random.uniform(0, 0.25)
                     print(
-                        f"NVIDIA model {model} returned a temporary error; "
-                        f"retrying in {delay:.1f}s."
+                        f"NVIDIA model {model} returned a temporary error "
+                        f"({status}); retrying in {delay:.1f}s."
                     )
                     time.sleep(delay)
                 elif model_index + 1 < len(models):
@@ -273,10 +394,9 @@ def stream_nvidia(
         "temperature": temperature,
         "stream": True,
     }
-    models = list(dict.fromkeys(
-        model for model in (NVIDIA_MODEL, NVIDIA_FALLBACK_MODEL) if model
-    ))
+    models = get_model_list()
     transient_error_codes = {429, 500, 502, 503, 504}
+    gone_error_codes = {404, 410}
     last_error: Optional[Exception] = None
 
     for model_index, model in enumerate(models):
@@ -305,6 +425,16 @@ def stream_nvidia(
                                 yield content
                 return
             except httpx.HTTPStatusError as error:
+                if (
+                    error.response.status_code in gone_error_codes
+                    and not yielded_content
+                ):
+                    last_error = error
+                    print(
+                        f"NVIDIA model {model} is gone "
+                        f"({error.response.status_code}); skipping it."
+                    )
+                    break
                 if error.response.status_code not in transient_error_codes:
                     raise
                 if yielded_content:
@@ -348,31 +478,62 @@ def stream_chat_reply(
     total_start: float,
     max_tokens: int,
 ):
-    """Stream a regular chat reply as SSE and save it when generation finishes."""
+    """Stream a chat reply; fall back to non-streaming if the stream is empty/fails."""
     generation_start = time.perf_counter()
-    reply_parts = []
+    reply_parts: List[str] = []
 
     try:
-        for text in stream_nvidia(
-            messages,
-            max_tokens=max_tokens,
-            temperature=0.2,
-        ):
-            reply_parts.append(text)
-            yield encode_sse("token", {"text": text})
+        try:
+            for text in stream_nvidia(
+                messages,
+                max_tokens=max_tokens,
+                temperature=0.2,
+            ):
+                if text:
+                    reply_parts.append(text)
+                    yield encode_sse("token", {"text": text})
+        except Exception as stream_error:
+            # If streaming fails before producing anything, try the regular API path.
+            if reply_parts:
+                print("NVIDIA stream interrupted after partial output:", repr(stream_error))
+                yield encode_sse("token", {"text": "\n\n[The answer was interrupted. Please ask me to continue if needed.]"})
+            else:
+                print("NVIDIA stream failed; trying non-streaming fallback:", repr(stream_error))
 
-        reply = "".join(reply_parts)
+        reply = "".join(reply_parts).strip()
+        if not reply:
+            try:
+                fallback_response = call_nvidia(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=0.2,
+                )
+                reply = str(
+                    fallback_response.get("choices", [{}])[0]
+                    .get("message", {}).get("content") or ""
+                ).strip()
+                if reply:
+                    reply_parts.append(reply)
+                    yield encode_sse("token", {"text": reply})
+            except Exception as fallback_error:
+                print("NVIDIA non-streaming fallback failed:", repr(fallback_error))
 
+        if not "".join(reply_parts).strip():
+            # Never silently complete an empty stream: render a useful, actionable reply.
+            reply = (
+                "I'm sorry — I couldn't generate an answer just now because the AI service "
+                "didn't return any text. Please try again in a moment. If this keeps happening, "
+                "check the NVIDIA API key, model availability, and server logs."
+            )
+            reply_parts.append(reply)
+            yield encode_sse("token", {"text": reply})
+
+        reply = "".join(reply_parts).strip()
         if request.chat_id:
             old_history = list(request.history)
             if request.message.strip():
-                old_history.append(
-                    {"role": "user", "content": request.message.strip()}
-                )
-            old_history.append(
-                {"role": "assistant", "content": reply}
-            )
-
+                old_history.append({"role": "user", "content": request.message.strip()})
+            old_history.append({"role": "assistant", "content": reply})
             saved_chats[request.chat_id] = {
                 "id": request.chat_id,
                 "title": request.chat_title or "New chat",
@@ -383,10 +544,7 @@ def stream_chat_reply(
 
         generation_time = time.perf_counter() - generation_start
         total_time = time.perf_counter() - total_start
-        print(
-            f"NVIDIA stream: {generation_time:.2f}s | "
-            f"Total: {total_time:.2f}s"
-        )
+        print(f"NVIDIA stream/fallback: {generation_time:.2f}s | Total: {total_time:.2f}s")
         yield encode_sse(
             "done",
             {
@@ -397,10 +555,13 @@ def stream_chat_reply(
             },
         )
     except Exception as error:
-        print("\n========== CHAT STREAM ERROR ==========")
-        print(repr(error))
-        print("========================================\n")
-        yield encode_sse("error", {"detail": "AI request failed."})
+        print("CHAT RESPONSE ERROR:", repr(error))
+        # This is a last-resort visible message, not an empty response.
+        yield encode_sse(
+            "token",
+            {"text": "I'm sorry, something went wrong while preparing the answer. Please try again."},
+        )
+        yield encode_sse("done", {})
 
 
 def extract_attachment_text(attachment: Attachment) -> str:
@@ -737,6 +898,72 @@ def top_up_quiz_questions(
     return quiz_data
 
 
+def verify_quiz_answers(
+    quiz_data: Dict[str, Any],
+    class_level: str,
+    subject: Optional[str],
+    chapter: Optional[str],
+) -> Dict[str, Any]:
+    """Second pass: model re-solves every MCQ and fixes wrong answers."""
+    session = get_academic_session()
+    system_prompt = f"""You are a strict CBSE Class {class_level} examiner checking a quiz.
+
+For EVERY question:
+1. Solve it yourself from scratch, step by step, before looking at the answer key.
+2. Fix the answer if it is wrong.
+3. If two options could both be correct, or none is correct, rewrite the options so exactly one is correct.
+4. Remove or replace any question outside the CBSE {session} syllabus and latest NCERT books for Class {class_level}.
+5. Check numericals, units and LaTeX delimiters.
+6. Do not add the session or year to the title or any text.
+
+Keep the same number of questions, ids, and JSON structure.
+Keep hint and explanation under 25 words.
+Return ONLY the corrected JSON object, nothing else."""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": (
+                f"Subject: {subject or 'Not detected'}\n"
+                f"Chapter: {chapter or 'Not detected'}\n\n"
+                + json.dumps(quiz_data, ensure_ascii=False)
+            ),
+        },
+    ]
+
+    try:
+        started = time.perf_counter()
+        response = call_nvidia(
+            messages,
+            max_tokens=get_quiz_max_tokens(
+                len(quiz_data["quiz"]["questions"])
+            ),
+            temperature=0.1,
+            response_mime_type="application/json",
+            timeout=QUIZ_TIMEOUT_SECONDS,
+        )
+        checked = parse_quiz_response(
+            response["choices"][0]["message"]["content"] or ""
+        )
+        took = time.perf_counter() - started
+
+        if (
+            checked
+            and len(checked["quiz"]["questions"])
+            == len(quiz_data["quiz"]["questions"])
+        ):
+            print(f"Quiz verified in {took:.2f}s")
+            return checked
+
+        print("Quiz verification output unusable, keeping original.")
+
+    except Exception as error:
+        print("Quiz verification failed:", repr(error))
+
+    return quiz_data
+
+
 def build_quiz_intro_message(
     actual_count: int,
     requested_count: int,
@@ -826,6 +1053,20 @@ def detect_subject(text: str) -> Optional[str]:
 
     if scores[best_subject] <= 0:
         return None
+
+    # #region agent log
+    _agent_dbg(
+        "main.py:detect_subject",
+        "subject scores",
+        {
+            "best": best_subject,
+            "best_score": scores[best_subject],
+            "scores": {k: v for k, v in scores.items() if v},
+            "text_preview": text[:160],
+        },
+        "C",
+    )
+    # #endregion
 
     return best_subject
 
@@ -921,76 +1162,107 @@ def get_recent_history_text(
 
 def detect_from_conversation(
     current_message: str,
-    history: List[HistoryMessage]
+    history: List[HistoryMessage],
+    class_level: Optional[str] = None,
 ):
+    """Prioritize the current question; use recent history only as fallback."""
+    subject = detect_subject(current_message)
+    chapter = detect_chapter(current_message, subject)
+    if chapter is None and class_level:
+        chapter = detect_numbered_chapter(current_message, class_level, subject)
+    if subject or chapter:
+        return subject, chapter
 
     history_text = get_recent_history_text(history)
-
-    combined_text = (
-        history_text
-        + "\n"
-        + current_message
-    )
-
-    subject = detect_subject(
-        combined_text
-    )
-
-    chapter = detect_chapter(
-        combined_text,
-        subject
-    )
-
+    subject = detect_subject(history_text)
+    chapter = detect_chapter(history_text, subject)
+    if chapter is None and class_level:
+        chapter = detect_numbered_chapter(history_text, class_level, subject)
     return subject, chapter
 
 
-def resolve_class(
-    request: ChatRequest
-) -> str:
+def resolve_class(request: ChatRequest) -> str:
+    """Explicit class in the latest message wins over a stale UI default."""
+    message = normalize_text(request.message or "")
+    patterns = [
+        r"\bclass\s*(9|10|11|12)(?:st|nd|rd|th)?\b",
+        r"\bclass\s*(ix|x|xi|xii)\b",
+        r"\b(9|10|11|12)(?:st|nd|rd|th)\s*(?:class|standard)\b",
+        r"\b(9|10|11|12)(?:st|nd|rd|th)\b",
+    ]
+    roman_map = {"ix": "9", "x": "10", "xi": "11", "xii": "12"}
+    for pattern in patterns:
+        match = re.search(pattern, message)
+        if match:
+            value = match.group(1).lower()
+            return roman_map.get(value, value)
 
     if request.class_level:
-        value = str(
-            request.class_level
-        ).strip()
-
-        match = re.search(
-            r"\d+",
-            value
-        )
-
+        value = str(request.class_level).strip().lower()
+        match = re.search(r"\b(9|10|11|12)\b", value)
         if match:
-            return match.group(0)
-
-    text = normalize_text(
-        request.message
-    )
-
-    match = re.search(
-        r"class\s*(9|10|11|12)\b",
-        text
-    )
-
-    if match:
-        return match.group(1)
-
-    match = re.search(
-        r"class\s*(ix|x|xi|xii)\b",
-        text
-    )
-
-    if match:
-        roman = match.group(1)
-
-        roman_map = {
-            "ix": "9",
-            "x": "10",
-            "xi": "11",
-            "xii": "12"
-        }
-
-        return roman_map[roman]
-
+            return match.group(1)
+        for roman, number in roman_map.items():
+            if re.search(rf"\b{roman}\b", value):
+                return number
     return "12"
+
+
+# Chapter-number hints for common Class 10 NCERT chapter references.
+# Exact prescribed chapters can vary by edition/session; this is routing only.
+NUMBERED_CHAPTERS = {
+    ("10", "Physics"): {
+        1: "Light – Reflection and Refraction",
+        2: "The Human Eye and the Colourful World",
+        3: "Electricity",
+        4: "Magnetic Effects of Electric Current",
+        5: "Sources of Energy",
+    },
+    ("10", "Chemistry"): {
+        1: "Chemical Reactions and Equations",
+        2: "Acids, Bases and Salts",
+        3: "Metals and Non-metals",
+        4: "Carbon and Its Compounds",
+        5: "Periodic Classification of Elements",
+    },
+    ("10", "Biology"): {
+        1: "Life Processes",
+        2: "Control and Coordination",
+        3: "How Do Organisms Reproduce?",
+        4: "Heredity",
+        5: "Our Environment",
+    },
+    ("10", "Mathematics"): {
+        1: "Real Numbers", 2: "Polynomials",
+        3: "Pair of Linear Equations in Two Variables",
+        4: "Quadratic Equations", 5: "Arithmetic Progressions",
+        6: "Triangles", 7: "Coordinate Geometry",
+        8: "Introduction to Trigonometry",
+        9: "Some Applications of Trigonometry",
+        10: "Circles", 11: "Areas Related to Circles",
+        12: "Surface Areas and Volumes", 13: "Statistics", 14: "Probability",
+    },
+}
+
+
+def detect_numbered_chapter(
+    text: str, class_level: str, subject: Optional[str]
+) -> Optional[str]:
+    if not subject:
+        return None
+    match = re.search(
+        r"\b(?:chapter|chap|ch)\s*(?:no\.?\s*)?(\d{1,2})\b",
+        normalize_text(text),
+    )
+    if not match:
+        return None
+    subject_key = {
+        "Maths": "Mathematics",
+        "Computer Science": "Computer-Science",
+    }.get(subject.strip(), subject.strip())
+    return NUMBERED_CHAPTERS.get(
+        (str(class_level), subject_key), {}
+    ).get(int(match.group(1)))
 
 
 def should_use_rag(
@@ -1168,18 +1440,49 @@ def generate_query_embedding_cached(
     text: str
 ):
 
-    response = nvidia_chat_client.post(
-        "/embeddings",
-        json={
-            "input": [text],
-            "model": EMBEDDING_MODEL,
-            "input_type": "query",
-            "encoding_format": "float",
-        },
-        timeout=10.0,
-    )
-    response.raise_for_status()
-    result = response.json()
+    cache_prefix = f"{EMBEDDING_MODEL}::"
+    embedding_text = text[len(cache_prefix):] if text.startswith(cache_prefix) else text
+    try:
+        response = nvidia_chat_client.post(
+            "/embeddings",
+            json={
+                "input": [embedding_text],
+                "model": EMBEDDING_MODEL,
+                "input_type": "query",
+                "encoding_format": "float",
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except Exception as error:
+        # #region agent log
+        status = (
+            error.response.status_code
+            if isinstance(error, httpx.HTTPStatusError)
+            else None
+        )
+        body = ""
+        if isinstance(error, httpx.HTTPStatusError):
+            try:
+                body = (error.response.text or "")[:400]
+            except Exception:
+                body = ""
+        _agent_dbg(
+            "main.py:generate_query_embedding_cached",
+            "embedding request failed",
+            {
+                "model": EMBEDDING_MODEL,
+                "status": status,
+                "error_type": type(error).__name__,
+                "error": str(error)[:400],
+                "body": body,
+                "expected_dim": EMBEDDING_DIMENSION,
+            },
+            "A",
+        )
+        # #endregion
+        raise
 
     embeddings = result.get("data", [])
     if not embeddings:
@@ -1188,10 +1491,24 @@ def generate_query_embedding_cached(
     embedding = embeddings[0].get("embedding")
     if not isinstance(embedding, list):
         raise RuntimeError("NVIDIA returned an invalid query embedding.")
+    # #region agent log
+    _agent_dbg(
+        "main.py:generate_query_embedding_cached",
+        "embedding received",
+        {
+            "model": EMBEDDING_MODEL,
+            "got_dim": len(embedding),
+            "expected_dim": EMBEDDING_DIMENSION,
+            "dim_ok": len(embedding) == EMBEDDING_DIMENSION,
+        },
+        "A",
+    )
+    # #endregion
     if len(embedding) != EMBEDDING_DIMENSION:
         raise RuntimeError(
             f"Expected {EMBEDDING_DIMENSION} embedding dimensions from "
-            f"{EMBEDDING_MODEL}, got {len(embedding)}."
+            f"{EMBEDDING_MODEL}, got {len(embedding)}. "
+            "Check NVIDIA_EMBEDDING_DIMENSION and the Supabase vector column size."
         )
 
     return tuple(embedding)
@@ -1205,11 +1522,17 @@ def generate_query_embedding(
         text.lower().strip().split()
     )
 
-    return list(
+    embedding = list(
         generate_query_embedding_cached(
-            clean_text
+            f"{EMBEDDING_MODEL}::{clean_text}"
         )
     )
+    if len(embedding) != EMBEDDING_DIMENSION:
+        raise RuntimeError(
+            f"Embedding dimension mismatch: configured={EMBEDDING_DIMENSION}, "
+            f"received={len(embedding)}. Check NVIDIA_EMBEDDING_DIMENSION."
+        )
+    return embedding
 
 
 def search_ncert(
@@ -1274,6 +1597,14 @@ def search_ncert(
             "RAG ERROR:",
             repr(e)
         )
+        # #region agent log
+        _agent_dbg(
+            "main.py:search_ncert",
+            "rag error",
+            {"error_type": type(e).__name__, "error": repr(e)[:500]},
+            "A",
+        )
+        # #endregion
 
         return []
 
@@ -1376,6 +1707,8 @@ def build_system_prompt(
     ncert_context: str
 ):
 
+    syllabus_rules = build_syllabus_rules(class_level)
+
     subject_text = (
         subject
         or "Not explicitly detected"
@@ -1440,13 +1773,7 @@ ACADEMIC RULES:
 
 - Default to Class {class_level}.
 - Prefer CBSE/NCERT terminology.
-- Follow the latest officially published CBSE syllabus applicable to
-  Class {class_level}; do not assume an older academic session.
-- Do not mention or label content with a specific academic year unless
-  the student explicitly asks for one.
-- Treat supplied NCERT context as learning material, not proof that a
-  topic is part of the latest syllabus. If syllabus alignment is uncertain,
-  say so briefly instead of claiming the topic is currently prescribed.
+{syllabus_rules}
 - Do not silently switch to another class.
 - Give direct answers first.
 - Explain concepts clearly.
@@ -1541,6 +1868,8 @@ def build_quiz_prompt(
     user_message: str
 ) -> str:
 
+    syllabus_rules = build_syllabus_rules(class_level)
+
     subject_text = subject or "Not explicitly detected"
     chapter_text = chapter or "Not explicitly detected"
 
@@ -1576,18 +1905,13 @@ IMPORTANT:
 
 - The questions array MUST contain exactly {requested_count} questions.
 - Do not stop early, do not skip questions, do not truncate the JSON.
-- Keep every hint and explanation under 15 words so the JSON always fits.
+- Keep every hint and explanation under 25 words so the JSON always fits.
+- Think through each question carefully and solve numericals fully before writing the options.
 - Every question must have exactly 4 options.
 - Options must be A, B, C and D.
 - Only one option can be correct.
 - Questions should be suitable for CBSE Class {class_level}.
-- Follow the latest officially published CBSE syllabus applicable to
-  Class {class_level}; do not assume an older academic session.
-- Do not mention or label the quiz with a specific academic year unless
-  the student explicitly asks for one.
-- Treat supplied NCERT context as learning material, not proof that a
-  topic is part of the latest syllabus. If syllabus alignment is uncertain,
-  avoid presenting the topic as definitely prescribed.
+{syllabus_rules}
 - Prefer NCERT content when NCERT context is provided.
 - Do not invent facts.
 - Do not reveal the correct answer inside the question.
@@ -1677,7 +2001,6 @@ NCERT CONTEXT:
 {context_text}
 """
 def _strip_quiz_fences(text: str) -> str:
-    # Remove ```json ... ``` fences anywhere in the text
     text = re.sub(
         r"```(?:json)?\s*",
         "",
@@ -2068,9 +2391,8 @@ def chat(
         # -------------------------------------------------
 
         subject, chapter = detect_from_conversation(
-           current_message,
-          request.history
-      )
+            current_message, request.history, active_class
+        )
 
      # Explicit request values get priority
         if request.subject:
@@ -2239,6 +2561,8 @@ def chat(
         else:
             max_tokens = 1000
 
+        # Stream regular chat replies as Server-Sent Events (SSE).
+        # Quiz responses stay JSON because the frontend renders their structured data.
         if not quiz_request:
             return StreamingResponse(
                 stream_chat_reply(
@@ -2253,7 +2577,8 @@ def chat(
                 ),
                 media_type="text/event-stream",
                 headers={
-                    "Cache-Control": "no-cache",
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
                     "X-Accel-Buffering": "no",
                 },
             )
@@ -2265,6 +2590,7 @@ def chat(
             response_mime_type=(
                 "application/json" if quiz_request else None
             ),
+            timeout=QUIZ_TIMEOUT_SECONDS if quiz_request else None,
         )
         reply = response["choices"][0]["message"]["content"] or ""
 
@@ -2294,9 +2620,26 @@ def chat(
                 f"Quiz first pass: {got}/{requested_count} "
                 f"| finish={finish_reason}"
             )
-
-            # The model sometimes stops early (e.g. 14 of 20) or
-            # returns truncated JSON — retry once before falling back.
+            # #region agent log
+            _agent_dbg(
+                "main.py:chat",
+                "quiz first pass",
+                {
+                    "got": got,
+                    "requested": requested_count,
+                    "finish_reason": finish_reason,
+                    "parsed": bool(quiz_data),
+                    "generation_s": round(generation_time, 2),
+                    "reply_len": len(reply or ""),
+                    "reply_preview": (reply or "")[:180],
+                    "subject": subject,
+                    "chapter": chapter,
+                    "class_level": active_class,
+                    "rag_sources": len(rag_results),
+                },
+                "B",
+            )
+            # #endregion
             if quiz_data is None or got < requested_count:
                 print(
                     "Quiz incomplete — retrying once with a "
@@ -2312,7 +2655,7 @@ def chat(
                             "JSON object with type quiz. "
                             "Do not stop early and do not truncate. "
                             "Keep each hint and explanation under "
-                            "15 words. Output only the JSON."
+                            "25 words. Output only the JSON."
                         ),
                     }
                 ]
@@ -2323,6 +2666,7 @@ def chat(
                         max_tokens=max_tokens,
                         temperature=0.3,
                         response_mime_type="application/json",
+                        timeout=QUIZ_TIMEOUT_SECONDS,
                     )
                     retry_reply = retry_response["choices"][0]["message"]["content"] or ""
                     retry_quiz = parse_quiz_response(retry_reply)
@@ -2346,8 +2690,16 @@ def chat(
                         repr(retry_error),
                     )
 
+            if quiz_data and QUIZ_VERIFY_ANSWERS:
+                quiz_data = verify_quiz_answers(
+                    quiz_data,
+                    active_class,
+                    subject,
+                    chapter,
+                )
+
             if quiz_data:
-                # Guarantee the requested number of questions.
+               
                 quiz_data = top_up_quiz_questions(
                     quiz_data,
                     requested_count,
@@ -2500,6 +2852,14 @@ def chat(
         print(
             "================================\n"
         )
+        # #region agent log
+        _agent_dbg(
+            "main.py:chat",
+            "chat 500",
+            {"error_type": type(e).__name__, "error": repr(e)[:600]},
+            "E",
+        )
+        # #endregion
 
         raise HTTPException(
             status_code=500,
