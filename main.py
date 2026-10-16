@@ -40,7 +40,7 @@ if not SUPABASE_SERVICE_ROLE_KEY:
     raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY is missing")
 
 
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3.5-super-vl-120b-a12b")
 # comma separated, tried in order
 NVIDIA_FALLBACK_MODEL = os.getenv(
     "NVIDIA_FALLBACK_MODEL",
@@ -340,6 +340,17 @@ def call_nvidia(
                 # retired model, skip to next one
                 if (
                     isinstance(error, httpx.HTTPStatusError)
+                    and error.response.status_code == 403
+                ):
+                    last_error = error
+                    print(
+                        f"NVIDIA model {model} returned 403 Forbidden; "
+                        "checking the next configured model (if any)."
+                    )
+                    break
+
+                if (
+                    isinstance(error, httpx.HTTPStatusError)
                     and error.response.status_code in gone_error_codes
                 ):
                     last_error = error
@@ -425,6 +436,14 @@ def stream_nvidia(
                                 yield content
                 return
             except httpx.HTTPStatusError as error:
+                if error.response.status_code == 403 and not yielded_content:
+                    last_error = error
+                    print(
+                        f"NVIDIA model {model} returned 403 Forbidden; "
+                        "checking the next configured model (if any)."
+                    )
+                    break
+
                 if (
                     error.response.status_code in gone_error_codes
                     and not yielded_content
@@ -2353,6 +2372,46 @@ def health():
     }
 
 
+def is_simple_greeting(message: str) -> bool:
+    """Return True only when the whole message is a short greeting."""
+    normalized = normalize_text(message or "")
+    if not normalized or len(normalized.split()) > 6:
+        return False
+    return bool(re.fullmatch(
+        r"(?:hi+|hey+|hello+|hii+|heyy+|yo+|hola|good morning|good afternoon|good evening|how are you|what's up|whats up)[!.? ]*",
+        normalized,
+        flags=re.IGNORECASE,
+    ))
+
+
+def stream_local_greeting(request: ChatRequest, active_class: str, total_start: float):
+    """Reply to simple greetings without making an external AI request."""
+    reply = "Hiiii! 😊 Welcome back to Study Notes Pro! What are we studying today? 📚✨"
+    if request.chat_id:
+        history = [
+            {"role": item.role, "content": item.content}
+            for item in request.history
+            if item.role in {"user", "assistant"} and item.content.strip()
+        ]
+        if request.message.strip():
+            history.append({"role": "user", "content": request.message.strip()})
+        history.append({"role": "assistant", "content": reply})
+        saved_chats[request.chat_id] = {
+            "id": request.chat_id,
+            "title": request.chat_title or "New chat",
+            "updated_at": datetime.now().isoformat(),
+            "messages": history,
+            "class_level": active_class,
+        }
+    yield encode_sse("token", {"text": reply})
+    yield encode_sse("done", {
+        "class_level": active_class,
+        "subject": None,
+        "chapter": None,
+        "rag": {"used": False, "sources": 0},
+    })
+
+
 @app.post("/api/chat")
 def chat(
     request: ChatRequest
@@ -2376,6 +2435,20 @@ def chat(
                     "Message or attachment "
                     "is required."
                 )
+            )
+
+        # Fast path: greetings should never depend on NVIDIA availability.
+        if not request.attachments and is_simple_greeting(current_message):
+            active_class = resolve_class(request)
+            print(f"Local greeting fast-path: {current_message!r}")
+            return StreamingResponse(
+                stream_local_greeting(request, active_class, total_start),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
             )
 
         routing_start = (
