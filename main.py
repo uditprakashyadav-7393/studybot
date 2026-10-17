@@ -2378,15 +2378,39 @@ def is_simple_greeting(message: str) -> bool:
     if not normalized or len(normalized.split()) > 6:
         return False
     return bool(re.fullmatch(
-        r"(?:hi+|hey+|hello+|hii+|heyy+|yo+|hola|good morning|good afternoon|good evening|how are you|what's up|whats up)[!.? ]*",
+        r"(?:hi+|hey+|hello+|hii+|heyy+|yo+|hola|good morning|good afternoon|good evening)[!.? ]*",
         normalized,
         flags=re.IGNORECASE,
     ))
 
 
 def stream_local_greeting(request: ChatRequest, active_class: str, total_start: float):
+    GENERAL_GREETINGS = [
+    "**Hiiii! 👋😊 Welcome back to Study Notes Pro AI —**\n"
+    "your personal AI study companion! 📚✨ Need help with "
+    "**concepts, NCERT notes, formulas, numericals, or MCQs?** "
+    "What are we studying today?",
+
+    "**Heyyy! 🌟 Welcome to Study Notes Pro AI!**\n "
+    "Let's make learning easier with **clear explanations,** "
+    "**step-by-step solutions, and focused revision.** "
+    "Which subject are we starting with today? 🎓",
+
+    "**Hellooo! 😄 Your AI study companion is ready!**\n "
+    "We can explore chapters, solve problems, revise key "
+    "concepts, or practise a quiz. What's on your mind? 📖",
+
+    "**Hiiii, learner! 🚀 Welcome back!**\n "
+    "Tell me your  **subject, chapter, or question**, "
+    "and let's make your next study session productive. 📚",
+
+    "**Hey there! 💙 Study Notes Pro AI is ready to help!**\n "
+    "Whether you need detailed **notes, quick revision,** "
+    "**formula explanations, or practice questions,** "
+    "let's get started. What would you like to learn?"
+    ]
     """Reply to simple greetings without making an external AI request."""
-    reply = "Hiiii! 😊 Welcome back to Study Notes Pro! What are we studying today? 📚✨"
+    reply = random.choice(GENERAL_GREETINGS)
     if request.chat_id:
         history = [
             {"role": item.role, "content": item.content}
