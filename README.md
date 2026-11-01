@@ -3,6 +3,9 @@
 Your AI-Powered Study Companion for Classes 9-12
 <img width="1917" height="905" alt="Screenshot 2026-10-10 200446" src="https://github.com/user-attachments/assets/b34f9413-e8db-4be5-a32c-38821e1bb31a" />
 
+## 🎥 Demo Video
+
+[![StudyBot Demo](https://img.youtube.com/vi/1XdllJA1MJc/maxresdefault.jpg)](https://youtu.be/1XdllJA1MJc)
 
 **Website:** [Study Bot ](https://studybot.great-site.net)
 
@@ -10,7 +13,7 @@ Your AI-Powered Study Companion for Classes 9-12
 
 ## 🎯 About StudyBot
 
-StudyBot is an intelligent chatbot designed specifically for students in Classes 9-12, providing instant academic support, doubt resolution, and exam preparation guidance. Always available, always ready to help you excel in your studies!
+StudyBot is an intelligent chatbot designed specifically for students in Classes 9-12, providing instant academic support, doubt resolution, and exam preparation guidance. Always available, always ready to help.
 
 Whether you're struggling with a concept, preparing for exams, or need quick clarification on a topic, StudyBot is your personal AI tutor.
 
