@@ -4,7 +4,11 @@ Your AI-Powered Study Companion for Classes 9-12
 
 ## 📸 App Preview
 
-![StudyBot App Preview](https://github.com/user-attachments/assets/b34f9413-e8db-4be5-a32c-38821e1bb31a)
+<img width="500"  alt="Screenshot 2026-10-23 094645" src="https://github.com/user-attachments/assets/5b80be1b-567a-497e-b728-798529ff2182" />
+<img width="500" alt="Screenshot 2026-10-23 094634" src="https://github.com/user-attachments/assets/75affcf5-9914-455d-941f-842779315b79" />
+<img width="500" alt="Screenshot 2026-10-23 094619" src="https://github.com/user-attachments/assets/4d1b94d3-d549-4253-9535-57cf018a3157" />
+<img width="500" alt="Screenshot 2026-10-23 094657" src="https://github.com/user-attachments/assets/6cf18c74-44d7-407e-ab3f-7ae4ec237d07" />
+
 
 **Website:** [Study Bot](https://studybot.great-site.net)
 
@@ -12,7 +16,10 @@ Your AI-Powered Study Companion for Classes 9-12
 
 ## 🎥 Demo Video
 
-[![StudyBot Demo](https://img.youtube.com/vi/1XdllJA1MJc/maxresdefault.jpg)](https://youtu.be/1XdllJA1MJc)
+You can also watch [StudyBot Demo](https://youtu.be/1XdllJA1MJc) on youtube 
+
+
+
 
 ---
 
