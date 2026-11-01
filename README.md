@@ -1,13 +1,18 @@
 # 📚 Study Notes Pro AI Chat Bot (StudyBot)
 
 Your AI-Powered Study Companion for Classes 9-12
-<img width="1917" height="905" alt="Screenshot 2026-10-10 200446" src="https://github.com/user-attachments/assets/b34f9413-e8db-4be5-a32c-38821e1bb31a" />
+
+## 📸 App Preview
+
+![StudyBot App Preview](https://github.com/user-attachments/assets/b34f9413-e8db-4be5-a32c-38821e1bb31a)
+
+**Website:** [Study Bot](https://studybot.great-site.net)
+
+---
 
 ## 🎥 Demo Video
 
 [![StudyBot Demo](https://img.youtube.com/vi/1XdllJA1MJc/maxresdefault.jpg)](https://youtu.be/1XdllJA1MJc)
-
-**Website:** [Study Bot ](https://studybot.great-site.net)
 
 ---
 
